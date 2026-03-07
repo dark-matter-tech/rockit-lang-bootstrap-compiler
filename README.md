@@ -140,6 +140,19 @@ Tests/
     └── ...
 ```
 
+## Documentation
+
+Full technical documentation is in the [`docs/`](docs/Home.md) directory:
+
+- [Architecture](docs/Architecture.md) — Pipeline design and key decisions
+- [Bootstrap Process](docs/Bootstrap-Process.md) — Self-hosting and verification
+- [Building from Source](docs/Building-from-Source.md) — Platform setup and build instructions
+- [Compiler Phases](docs/Compiler-Phases.md) — All 8 phases in detail
+- [Language Reference](docs/Language-Reference.md) — Rockit syntax and features
+- [Security Architecture](docs/Security-Architecture.md) — Signing, manifests, Thompson defense
+- [Testing](docs/Testing.md) — Test suite and CI
+- [Troubleshooting](docs/Troubleshooting.md) — Common issues
+
 ## Related Repositories
 
 | Repository | Description |
