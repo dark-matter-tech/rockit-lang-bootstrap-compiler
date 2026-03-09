@@ -819,6 +819,7 @@ func testCommand(file: String?, filter: String? = nil, detailed: Bool = false, s
         }
     }
 
+    let runtimeDir = findRuntimeDir()
     var totalPassed = 0
     var totalFailed = 0
     var totalSkipped = 0
@@ -841,7 +842,7 @@ func testCommand(file: String?, filter: String? = nil, detailed: Bool = false, s
         let ast = importResolver.resolve(parsedAST)
 
         let checker = TypeChecker(ast: ast, diagnostics: diagnostics)
-        let typeResult = checker.check()
+        _ = checker.check()
 
         if diagnostics.hasErrors {
             print("  FAIL  \(testFile) (compilation errors)")
@@ -868,22 +869,13 @@ func testCommand(file: String?, filter: String? = nil, detailed: Bool = false, s
 
         if tests.isEmpty && filter == nil {
             // No @Test functions and no filter — run file as a whole (legacy mode)
-            let lowering = MIRLowering(typeCheckResult: typeResult)
-            let mir = lowering.lower()
-            let optimizer = MIROptimizer()
-            let optimized = optimizer.optimize(mir)
-            let codeGen = CodeGen()
-            let module = codeGen.generate(optimized)
-            let vm = VM(module: module, config: RuntimeConfig())
-
-            do {
-                try vm.run()
+            let result = runTestNative(source: source, fileName: testFile, runtimeDir: runtimeDir, libPaths: stdlibPaths, detailed: detailed)
+            if result.passed {
                 print("  PASS  \(testFile)")
                 totalPassed += 1
-            } catch {
-                let st = vm.captureStackTrace(error: error as! VMError)
+            } else {
                 print("  FAIL  \(testFile)")
-                print(st)
+                if !result.output.isEmpty { print(result.output) }
                 totalFailed += 1
             }
         } else {
@@ -925,40 +917,13 @@ func testCommand(file: String?, filter: String? = nil, detailed: Bool = false, s
 
                 let displayName = "\(fileName)::\(test.qualifiedName)"
 
-                let wDiag = DiagnosticEngine()
-                let wLexer = Lexer(source: wrapperSource, fileName: testFile, diagnostics: wDiag)
-                let wTokens = wLexer.tokenize()
-                let wParser = Parser(tokens: wTokens, diagnostics: wDiag)
-                let wParsedAst = wParser.parse()
-                let wImportResolver = ImportResolver(sourceDir: sourceDir, libPaths: stdlibPaths, diagnostics: wDiag)
-                let wAst = wImportResolver.resolve(wParsedAst)
-                let wChecker = TypeChecker(ast: wAst, diagnostics: wDiag)
-                let wResult = wChecker.check()
-
-                if wDiag.hasErrors {
-                    print("  FAIL  \(displayName) (compilation error)")
-                    totalFailed += 1
-                    continue
-                }
-
-                let lowering = MIRLowering(typeCheckResult: wResult)
-                let mir = lowering.lower()
-                let optimizer = MIROptimizer()
-                let optimized = optimizer.optimize(mir)
-                let codeGen = CodeGen()
-                let module = codeGen.generate(optimized)
-                let vm = VM(module: module, config: RuntimeConfig())
-
-                do {
-                    try vm.run()
+                let result = runTestNative(source: wrapperSource, fileName: testFile, runtimeDir: runtimeDir, libPaths: stdlibPaths, detailed: detailed)
+                if result.passed {
                     print("  PASS  \(displayName)")
                     totalPassed += 1
-                } catch {
-                    if let vmErr = error as? VMError {
-                        print("  FAIL  \(displayName) — \(vmErr)")
-                    } else {
-                        print("  FAIL  \(displayName) — \(error)")
-                    }
+                } else {
+                    print("  FAIL  \(displayName)")
+                    if !result.output.isEmpty { print(result.output) }
                     totalFailed += 1
                 }
             }
@@ -968,6 +933,84 @@ func testCommand(file: String?, filter: String? = nil, detailed: Bool = false, s
     let total = totalPassed + totalFailed + totalSkipped
     print("\n\(total) test(s): \(totalPassed) passed, \(totalFailed) failed, \(totalSkipped) skipped")
     if totalFailed > 0 { exit(1) }
+}
+
+/// Compile a test source to native, execute it, and return pass/fail + output.
+struct TestResult {
+    let passed: Bool
+    let output: String
+}
+
+func runTestNative(source: String, fileName: String, runtimeDir: String, libPaths: [String], detailed: Bool) -> TestResult {
+    let tempBinary = Platform.tempFilePath("rockit_test_\(ProcessInfo.processInfo.processIdentifier)_\(Int.random(in: 0..<1_000_000))")
+    defer {
+        try? FileManager.default.removeItem(atPath: tempBinary)
+        try? FileManager.default.removeItem(atPath: tempBinary + ".ll")
+    }
+
+    // Suppress compileToNative's progress output by redirecting stdout
+    fflush(stdout)
+    let savedStdout = dup(STDOUT_FILENO)
+    let devNull = open("/dev/null", O_WRONLY)
+    dup2(devNull, STDOUT_FILENO)
+    close(devNull)
+
+    let binary: String
+    do {
+        binary = try LLVMCodeGen.compileToNative(
+            source: source,
+            fileName: fileName,
+            outputPath: tempBinary,
+            runtimeDir: runtimeDir,
+            libPaths: libPaths,
+            emitLLVM: false
+        )
+    } catch {
+        // Restore stdout before returning
+        fflush(stdout)
+        dup2(savedStdout, STDOUT_FILENO)
+        close(savedStdout)
+        return TestResult(passed: false, output: "compilation error: \(error)")
+    }
+
+    // Restore stdout
+    fflush(stdout)
+    dup2(savedStdout, STDOUT_FILENO)
+    close(savedStdout)
+
+    // Execute the native binary
+    do {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+
+        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if process.terminationStatus == 0 {
+            // For detailed mode, pass through the probe results
+            if detailed && output.contains("__PROBE_RESULTS_BEGIN") {
+                let lines = output.components(separatedBy: "\n")
+                var inResults = false
+                var resultLines: [String] = []
+                for line in lines {
+                    if line.contains("__PROBE_RESULTS_BEGIN") { inResults = true; continue }
+                    if line.contains("__PROBE_RESULTS_END") { inResults = false; continue }
+                    if inResults { resultLines.append(line) }
+                }
+                return TestResult(passed: true, output: resultLines.joined(separator: "\n"))
+            }
+            return TestResult(passed: true, output: "")
+        } else {
+            return TestResult(passed: false, output: output)
+        }
+    } catch {
+        return TestResult(passed: false, output: "execution error: \(error)")
+    }
 }
 
 // MARK: - Watch Test Command

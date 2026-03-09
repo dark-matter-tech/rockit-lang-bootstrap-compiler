@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (Ubuntu 22.04, Swift 5.10)
+    runs-on: ubuntu-22.04
+    container: swift:5.10.1-jammy
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update -q
+          apt-get install -y -q libssl-dev pkg-config
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        run: swift test
+
+  macos:
+    name: macOS (ARM64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        run: swift test

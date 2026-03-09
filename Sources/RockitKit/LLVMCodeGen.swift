@@ -4774,6 +4774,31 @@ extension LLVMCodeGen {
             throw LLVMCodeGenError.clangNotFound
         }
 
+        // Detect clang version for opaque pointer flag (needed for clang < 16)
+        var needsOpaquePointerFlag = false
+        let versionProc = Process()
+        versionProc.executableURL = URL(fileURLWithPath: clangPath)
+        versionProc.arguments = ["--version"]
+        let versionPipe = Pipe()
+        versionProc.standardOutput = versionPipe
+        versionProc.standardError = Pipe()
+        try? versionProc.run()
+        versionProc.waitUntilExit()
+        let versionData = versionPipe.fileHandleForReading.readDataToEndOfFile()
+        if let versionStr = String(data: versionData, encoding: .utf8) {
+            // Parse major version from "clang version X.Y.Z" or "Apple clang version X.Y.Z"
+            let pattern = try? NSRegularExpression(pattern: "clang version (\\d+)")
+            if let match = pattern?.firstMatch(in: versionStr, range: NSRange(versionStr.startIndex..., in: versionStr)),
+               let range = Range(match.range(at: 1), in: versionStr),
+               let major = Int(versionStr[range]) {
+                // Apple clang 17 maps to upstream LLVM 19 — opaque pointers are default
+                // Non-Apple clang < 16 needs the flag
+                if !versionStr.contains("Apple") && major < 16 {
+                    needsOpaquePointerFlag = true
+                }
+            }
+        }
+
         // Find runtime object file — prefer pre-built .o, fall back to compiling .c
         let prebuiltObj = Platform.pathJoin(runtimeDir, "rockit_runtime.o")
         let runtimeObjPath: String
@@ -4812,6 +4837,9 @@ extension LLVMCodeGen {
         let link = Process()
         link.executableURL = URL(fileURLWithPath: clangPath)
         var linkArgs = ["-O2", llPath, runtimeObjPath, "-o", finalOutputPath]
+        if needsOpaquePointerFlag {
+            linkArgs.insert(contentsOf: ["-Xclang", "-opaque-pointers"], at: 0)
+        }
         // OpenSSL libraries
         linkArgs += ["-lssl", "-lcrypto"]
         #if os(macOS) || os(iOS)
