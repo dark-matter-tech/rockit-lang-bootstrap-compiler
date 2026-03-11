@@ -4814,7 +4814,7 @@ extension LLVMCodeGen {
             runtimeObjPath = Platform.tempFilePath("rockit_runtime" + Platform.objectFileExtension)
             let compileRuntime = Process()
             compileRuntime.executableURL = URL(fileURLWithPath: clangPath)
-            var compileArgs = ["-c", "-O2", "-I", runtimeDir, runtimeSrcPath, "-o", runtimeObjPath]
+            var compileArgs = ["-c", "-O1", "-I", runtimeDir, runtimeSrcPath, "-o", runtimeObjPath]
             #if os(macOS) || os(iOS)
             // Homebrew OpenSSL include path
             let brewOpenSSLInclude = "/opt/homebrew/opt/openssl@3/include"
@@ -4836,7 +4836,7 @@ extension LLVMCodeGen {
         let finalOutputPath = Platform.withExeExtension(outputPath)
         let link = Process()
         link.executableURL = URL(fileURLWithPath: clangPath)
-        var linkArgs = ["-O2", llPath, runtimeObjPath, "-o", finalOutputPath]
+        var linkArgs = ["-O1", llPath, runtimeObjPath, "-o", finalOutputPath]
         if needsOpaquePointerFlag {
             linkArgs.insert(contentsOf: ["-Xclang", "-opaque-pointers"], at: 0)
         }
