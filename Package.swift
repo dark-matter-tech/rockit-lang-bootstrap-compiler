@@ -4,6 +4,23 @@
 
 import PackageDescription
 
+#if os(Linux)
+let platformTargets: [Target] = [
+    .systemLibrary(
+        name: "COpenSSL",
+        path: "Sources/COpenSSL",
+        pkgConfig: "openssl",
+        providers: [.apt(["libssl-dev"])]
+    ),
+]
+let openSSLDep: [Target.Dependency] = [
+    .target(name: "COpenSSL", condition: .when(platforms: [.linux])),
+]
+#else
+let platformTargets: [Target] = []
+let openSSLDep: [Target.Dependency] = []
+#endif
+
 let package = Package(
     name: "rockit-lang",
     platforms: [
@@ -16,19 +33,12 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
-    targets: [
-        .systemLibrary(
-            name: "COpenSSL",
-            path: "Sources/COpenSSL",
-            pkgConfig: "openssl",
-            providers: [.apt(["libssl-dev"])]
-        ),
+    targets: platformTargets + [
         .target(
             name: "RockitKit",
             dependencies: [
                 .product(name: "Crypto", package: "swift-crypto"),
-                .target(name: "COpenSSL", condition: .when(platforms: [.linux])),
-            ],
+            ] + openSSLDep,
             path: "Sources/RockitKit"
         ),
         .target(
